@@ -26,6 +26,7 @@ import 'package:google_ml_kit/google_ml_kit.dart' hide Message;
 import 'package:scroll_to_index/scroll_to_index.dart';
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 import 'package:bluebubbles/src/rust/api/api.dart' as api;
+import 'package:flutter/services.dart';
 
 class MessagesView extends StatefulWidget {
   final MessagesService? customService;
@@ -51,25 +52,32 @@ class MessagesViewState extends OptimizedState<MessagesView> {
   RxMap<String, Widget> internalSmartReplies = <String, Widget>{}.obs;
 
   late final messageService = widget.customService ?? ms(chat.guid)
-    ..init(chat, handleNewMessage, handleUpdatedMessage, handleDeletedMessage, jumpToMessage);
+    ..init(chat, handleNewMessage, handleUpdatedMessage, handleDeletedMessage,
+        jumpToMessage);
   final smartReply = GoogleMlKit.nlp.smartReply();
   final listKey = GlobalKey<SliverAnimatedListState>();
   final RxBool dragging = false.obs;
   final RxInt numFiles = 0.obs;
   final RxBool latestMessageDeliveredState = false.obs;
   final RxBool jumpingToOldestUnread = false.obs;
+  final FocusNode _dpadFocusNode = FocusNode(debugLabel: "MessagesViewDPAD");
 
   ConversationViewController get controller => widget.controller;
 
   AutoScrollController get scrollController => controller.scrollController;
 
-  bool get showSmartReplies => ss.settings.smartReply.value && !kIsWeb && !kIsDesktop;
+  bool get showSmartReplies =>
+      ss.settings.smartReply.value && !kIsWeb && !kIsDesktop;
 
   Chat get chat => controller.chat;
 
   @override
   void initState() {
     super.initState();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _dpadFocusNode.requestFocus();
+    });
 
     eventDispatcher.stream.listen((e) async {
       if (e.item1 == "refresh-messagebloc" && e.item2 == chat.guid) {
@@ -78,11 +86,13 @@ class MessagesViewState extends OptimizedState<MessagesView> {
         _messages = [];
         // Reload the state after refreshing
         messageService.reload();
-        messageService.init(chat, handleNewMessage, handleUpdatedMessage, handleDeletedMessage, jumpToMessage);
+        messageService.init(chat, handleNewMessage, handleUpdatedMessage,
+            handleDeletedMessage, jumpToMessage);
         setState(() {});
       } else if (e.item1 == "add-custom-smartreply") {
         if (e.item2 != null && internalSmartReplies['attach-recent'] == null) {
-          internalSmartReplies['attach-recent'] = _buildReply("Attach recent photo", onTap: () async {
+          internalSmartReplies['attach-recent'] =
+              _buildReply("Attach recent photo", onTap: () async {
             controller.pickedAttachments.add(e.item2);
             internalSmartReplies.clear();
           });
@@ -94,10 +104,15 @@ class MessagesViewState extends OptimizedState<MessagesView> {
       if (chat.isIMessage && !chat.isGroup) {
         getFocusState();
       }
-      final searchMessage = (messageService.method == null) ? null : messageService.struct.messages.firstOrNull;
+      final searchMessage = (messageService.method == null)
+          ? null
+          : messageService.struct.messages.firstOrNull;
       if (messageService.method != null) {
         await messageService.loadSearchChunk(
-            messageService.struct.messages.first, messageService.method == "local" ? SearchMethod.local : SearchMethod.network);
+            messageService.struct.messages.first,
+            messageService.method == "local"
+                ? SearchMethod.local
+                : SearchMethod.network);
       } else if (messageService.struct.isEmpty) {
         await messageService.loadChunk(0, controller);
       }
@@ -107,21 +122,27 @@ class MessagesViewState extends OptimizedState<MessagesView> {
       _messages.forEachIndexed((i, m) {
         final c = mwc(m);
         c.cvController = controller;
-        listKey.currentState!.insertItem(i, duration: const Duration(milliseconds: 0));
+        listKey.currentState!
+            .insertItem(i, duration: const Duration(milliseconds: 0));
       });
       // scroll to message if needed
       if (searchMessage != null) {
-        final index = _messages.indexWhere((element) => element.guid == searchMessage.guid);
-        await scrollController.scrollToIndex(index, preferPosition: AutoScrollPosition.middle);
-        scrollController.highlight(index, highlightDuration: const Duration(milliseconds: 500));
+        final index = _messages
+            .indexWhere((element) => element.guid == searchMessage.guid);
+        await scrollController.scrollToIndex(index,
+            preferPosition: AutoScrollPosition.middle);
+        scrollController.highlight(index,
+            highlightDuration: const Duration(milliseconds: 500));
       } else if (!(_messages.firstOrNull?.isFromMe ?? true)) {
         updateReplies();
       }
       initialized = true;
-      if (ss.settings.scrollToLastUnread.value && chat.lastReadMessageGuid != null) {
+      if (ss.settings.scrollToLastUnread.value &&
+          chat.lastReadMessageGuid != null) {
         Future.delayed(const Duration(milliseconds: 100), () {
           if (getActiveMwc(chat.lastReadMessageGuid!)?.built ?? false) return;
-          internalSmartReplies['scroll-last-read'] = _buildReply("Jump to oldest unread", onTap: () async {
+          internalSmartReplies['scroll-last-read'] =
+              _buildReply("Jump to oldest unread", onTap: () async {
             if (jumpingToOldestUnread.value) return;
             jumpingToOldestUnread.value = true;
             await jumpToMessage(chat.lastReadMessageGuid!);
@@ -142,6 +163,7 @@ class MessagesViewState extends OptimizedState<MessagesView> {
     for (Message m in _messages) {
       getActiveMwc(m.guid!)?.close();
     }
+    _dpadFocusNode.dispose();
     super.dispose();
   }
 
@@ -162,13 +184,16 @@ class MessagesViewState extends OptimizedState<MessagesView> {
     // check if the message is already loaded
     int index = _messages.indexWhere((element) => element.guid == guid);
     if (index != -1) {
-      await scrollController.scrollToIndex(index, preferPosition: AutoScrollPosition.middle);
-      scrollController.highlight(index, highlightDuration: const Duration(milliseconds: 500));
+      await scrollController.scrollToIndex(index,
+          preferPosition: AutoScrollPosition.middle);
+      scrollController.highlight(index,
+          highlightDuration: const Duration(milliseconds: 500));
       return;
     }
     // otherwise fetch until it is loaded
     final message = Message.findOne(guid: guid);
-    final query = (Database.messages.query(Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()))
+    final query = (Database.messages.query(
+            Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()))
           ..link(Message_.chat, Chat_.id.equals(chat.id!))
           ..order(Message_.dateCreated, flags: Order.descending))
         .build();
@@ -177,18 +202,28 @@ class MessagesViewState extends OptimizedState<MessagesView> {
     await loadNextChunk(limit: pos + 10);
     index = _messages.indexWhere((element) => element.guid == guid);
     if (index != -1) {
-      await scrollController.scrollToIndex(index, preferPosition: AutoScrollPosition.middle);
-      scrollController.highlight(index, highlightDuration: const Duration(milliseconds: 500));
+      await scrollController.scrollToIndex(index,
+          preferPosition: AutoScrollPosition.middle);
+      scrollController.highlight(index,
+          highlightDuration: const Duration(milliseconds: 500));
     } else {
       showSnackbar("Error", "Failed to find message!");
     }
   }
 
   void updateReplies({bool updateConversation = true}) async {
-    if (!showSmartReplies || isNullOrEmpty(_messages) || kIsWeb || kIsDesktop || !mounted || !ls.isAlive) return;
+    if (!showSmartReplies ||
+        isNullOrEmpty(_messages) ||
+        kIsWeb ||
+        kIsDesktop ||
+        !mounted ||
+        !ls.isAlive) return;
 
     if (updateConversation) {
-      _messages.reversed.where((e) => !isNullOrEmpty(e.fullText) && e.dateCreated != null).skip(max(_messages.length - 5, 0)).forEach((message) {
+      _messages.reversed
+          .where((e) => !isNullOrEmpty(e.fullText) && e.dateCreated != null)
+          .skip(max(_messages.length - 5, 0))
+          .forEach((message) {
         _addMessageToSmartReply(message);
       });
     }
@@ -197,7 +232,8 @@ class MessagesViewState extends OptimizedState<MessagesView> {
 
     if (results.status == SmartReplySuggestionResultStatus.success) {
       Logger.info("Smart Replies found: ${results.suggestions.length}");
-      smartReplies.value = results.suggestions.map((e) => _buildReply(e)).toList();
+      smartReplies.value =
+          results.suggestions.map((e) => _buildReply(e)).toList();
       Logger.debug(smartReplies.toString());
     } else {
       smartReplies.clear();
@@ -206,10 +242,13 @@ class MessagesViewState extends OptimizedState<MessagesView> {
 
   void _addMessageToSmartReply(Message message) {
     if (message.isFromMe ?? false) {
-      smartReply.addMessageToConversationFromLocalUser(message.fullText, message.dateCreated!.millisecondsSinceEpoch);
+      smartReply.addMessageToConversationFromLocalUser(
+          message.fullText, message.dateCreated!.millisecondsSinceEpoch);
     } else {
       smartReply.addMessageToConversationFromRemoteUser(
-          message.fullText, message.dateCreated!.millisecondsSinceEpoch, message.handle?.address ?? "participant");
+          message.fullText,
+          message.dateCreated!.millisecondsSinceEpoch,
+          message.handle?.address ?? "participant");
     }
   }
 
@@ -218,7 +257,9 @@ class MessagesViewState extends OptimizedState<MessagesView> {
     fetching = true;
 
     // Start loading the next chunk of messages
-    noMoreMessages = !(await messageService.loadChunk(_messages.length, controller, limit: limit).catchError((e, stack) {
+    noMoreMessages = !(await messageService
+        .loadChunk(_messages.length, controller, limit: limit)
+        .catchError((e, stack) {
       Logger.error("Failed to fetch message chunk!", error: e, trace: stack);
       return true;
     }));
@@ -233,7 +274,8 @@ class MessagesViewState extends OptimizedState<MessagesView> {
       if (!mounted) return;
       final c = mwc(m);
       c.cvController = controller;
-      listKey.currentState!.insertItem(i, duration: const Duration(milliseconds: 0));
+      listKey.currentState!
+          .insertItem(i, duration: const Duration(milliseconds: 0));
     });
     // should only happen when a reaction is the most recent message
     if (oldLength == 0) {
@@ -262,25 +304,30 @@ class MessagesViewState extends OptimizedState<MessagesView> {
       }
     }
 
-    if (insertIndex == 0 && !message.isFromMe! && ss.settings.receiveSoundPath.value != null) {
+    if (insertIndex == 0 &&
+        !message.isFromMe! &&
+        ss.settings.receiveSoundPath.value != null) {
       if (kIsDesktop && (cm.getChatController(chat.guid)?.isActive ?? false)) {
         Player player = Player();
-        player.stream.completed
-            .firstWhere((completed) => completed)
-            .then((_) async => Future.delayed(const Duration(milliseconds: 500), () async => await player.dispose()));
+        player.stream.completed.firstWhere((completed) => completed).then(
+            (_) async => Future.delayed(const Duration(milliseconds: 500),
+                () async => await player.dispose()));
         await player.setVolume(ss.settings.soundVolume.value.toDouble());
         await player.open(Media(ss.settings.receiveSoundPath.value!));
       } else if (cm.isChatActive(chat.guid)) {
         PlayerController controller = PlayerController();
         await controller
-            .preparePlayer(path: ss.settings.receiveSoundPath.value!, volume: ss.settings.soundVolume.value / 100)
+            .preparePlayer(
+                path: ss.settings.receiveSoundPath.value!,
+                volume: ss.settings.soundVolume.value / 100)
             .then((_) => controller.startPlayer());
       }
     }
   }
 
   void handleUpdatedMessage(Message message, {String? oldGuid}) {
-    final index = _messages.indexWhere((e) => e.guid == (oldGuid ?? message.guid));
+    final index =
+        _messages.indexWhere((e) => e.guid == (oldGuid ?? message.guid));
     if (index != -1) {
       _messages[index] = message;
     }
@@ -293,7 +340,8 @@ class MessagesViewState extends OptimizedState<MessagesView> {
     final index = _messages.indexWhere((e) => e.guid == message.guid);
     if (index != -1) {
       _messages.removeAt(index);
-      listKey.currentState!.removeItem(index, (context, animation) => const SizedBox.shrink());
+      listKey.currentState!
+          .removeItem(index, (context, animation) => const SizedBox.shrink());
     }
   }
 
@@ -325,11 +373,15 @@ class MessagesViewState extends OptimizedState<MessagesView> {
               },
           child: Center(
             child: Padding(
-              padding: const EdgeInsets.only(bottom: 1.5, left: 13.0, right: 13.0),
+              padding:
+                  const EdgeInsets.only(bottom: 1.5, left: 13.0, right: 13.0),
               child: Obx(() => RichText(
                     text: TextSpan(
                       children: MessageHelper.buildEmojiText(
-                        jumpingToOldestUnread.value && text == "Jump to oldest unread" ? "Jumping to oldest unread..." : text,
+                        jumpingToOldestUnread.value &&
+                                text == "Jump to oldest unread"
+                            ? "Jumping to oldest unread..."
+                            : text,
                         context.theme.extension<BubbleText>()!.bubbleText,
                       ),
                     ),
@@ -342,401 +394,641 @@ class MessagesViewState extends OptimizedState<MessagesView> {
   @override
   Widget build(BuildContext context) {
     const moonIcon = CupertinoIcons.moon_fill;
-    return DropRegion(
-      hitTestBehavior: HitTestBehavior.translucent,
-      formats: Formats.standardFormats,
-      onDropOver: (DropOverEvent event) {
-        if (!event.session.allowedOperations.contains(DropOperation.copy)) {
-          dragging.value = false;
-          return DropOperation.forbidden;
-        }
-        numFiles.value = event.session.items.where((item) => Formats.standardFormats.whereType<FileFormat>().any((f) => item.canProvide(f))).length;
-        if (numFiles.value > 0) {
-          dragging.value = true;
-          return DropOperation.copy;
-        }
+    return RawKeyboardListener(
+        focusNode: _dpadFocusNode,
+        autofocus: true,
+        onKey: (RawKeyEvent event) {
+          if (event is! RawKeyDownEvent) return;
 
-        dragging.value = false;
-        return DropOperation.forbidden;
-      },
-      onDropLeave: (_) {
-        dragging.value = false;
-      },
-      onPerformDrop: (PerformDropEvent event) async {
-        for (DropItem item in event.session.items) {
-          final reader = item.dataReader!;
-          FileFormat? format = reader.getFormats(Formats.standardFormats).whereType<FileFormat>().firstOrNull;
+          final key = event.logicalKey;
 
-          if (format == null) return;
+          Logger.info(
+              "[DPAD] keyDown logical=${key.debugName} keyId=${key.keyId}");
 
-          reader.getFile(format, (file) async {
-            Uint8List bytes = await file.readAll();
-            controller.pickedAttachments.add(PlatformFile(
-              path: file.fileName!,
-              name: file.fileName!,
-              size: file.fileSize!,
-              bytes: bytes,
-            ));
-          });
-        }
-        dragging.value = false;
-      },
-      child: GestureDetector(
-          behavior: HitTestBehavior.deferToChild,
-          onHorizontalDragUpdate: (details) {
-            if (ss.settings.skin.value != Skins.Samsung && !kIsWeb && !kIsDesktop) {
-              controller.timestampOffset.value += details.delta.dx * 0.3;
+          if (key == LogicalKeyboardKey.arrowUp) Logger.info("[DPAD] UP");
+          if (key == LogicalKeyboardKey.arrowDown) Logger.info("[DPAD] DOWN");
+          if (key == LogicalKeyboardKey.arrowLeft) Logger.info("[DPAD] LEFT");
+          if (key == LogicalKeyboardKey.arrowRight) Logger.info("[DPAD] RIGHT");
+          if (key == LogicalKeyboardKey.enter ||
+              key == LogicalKeyboardKey.select) {
+            Logger.info("[DPAD] SELECT");
+          }
+          if (key == LogicalKeyboardKey.escape ||
+              key == LogicalKeyboardKey.goBack) {
+            Logger.info("[DPAD] BACK");
+          }
+        },
+        child: DropRegion(
+          hitTestBehavior: HitTestBehavior.translucent,
+          formats: Formats.standardFormats,
+          onDropOver: (DropOverEvent event) {
+            if (!event.session.allowedOperations.contains(DropOperation.copy)) {
+              dragging.value = false;
+              return DropOperation.forbidden;
             }
-          },
-          onHorizontalDragEnd: (details) {
-            if (ss.settings.skin.value != Skins.Samsung) {
-              controller.timestampOffset.value = 0;
+            numFiles.value = event.session.items
+                .where((item) => Formats.standardFormats
+                    .whereType<FileFormat>()
+                    .any((f) => item.canProvide(f)))
+                .length;
+            if (numFiles.value > 0) {
+              dragging.value = true;
+              return DropOperation.copy;
             }
+
+            dragging.value = false;
+            return DropOperation.forbidden;
           },
-          onHorizontalDragCancel: () {
-            if (ss.settings.skin.value != Skins.Samsung) {
-              controller.timestampOffset.value = 0;
+          onDropLeave: (_) {
+            dragging.value = false;
+          },
+          onPerformDrop: (PerformDropEvent event) async {
+            for (DropItem item in event.session.items) {
+              final reader = item.dataReader!;
+              FileFormat? format = reader
+                  .getFormats(Formats.standardFormats)
+                  .whereType<FileFormat>()
+                  .firstOrNull;
+
+              if (format == null) return;
+
+              reader.getFile(format, (file) async {
+                Uint8List bytes = await file.readAll();
+                controller.pickedAttachments.add(PlatformFile(
+                  path: file.fileName!,
+                  name: file.fileName!,
+                  size: file.fileSize!,
+                  bytes: bytes,
+                ));
+              });
             }
+            dragging.value = false;
           },
-          child: Stack(
-            children: [
-              Obx(
-                () => AnimatedOpacity(
-                  opacity: _messages.isEmpty && widget.customService == null ? 0 : (dragging.value ? 0.3 : 1),
-                  duration: const Duration(milliseconds: 150),
-                  curve: Curves.easeIn,
-                  child: DeferredPointerHandler(
-                    child: ScrollbarWrapper(
-                      reverse: true,
-                      controller: scrollController,
-                      showScrollbar: true,
-                      child: CustomScrollView(
-                        controller: scrollController,
-                        reverse: true,
-                        physics: ThemeSwitcher.getScrollPhysics(),
-                        slivers: <Widget>[
-                          if (showSmartReplies || internalSmartReplies.isNotEmpty)
-                            SliverToBoxAdapter(
-                              child: Obx(() => AnimatedSize(
-                                  duration: const Duration(milliseconds: 400),
-                                  child: smartReplies.isNotEmpty || internalSmartReplies.isNotEmpty
-                                      ? Padding(
-                                          padding: EdgeInsets.only(top: iOS ? 8.0 : 0.0, right: 5),
-                                          child: SizedBox(
-                                            height: context.theme.extension<BubbleText>()!.bubbleText.fontSize! + 35,
-                                            child: ListView(
-                                              scrollDirection: Axis.horizontal,
-                                              reverse: true,
-                                              children: List<Widget>.from(smartReplies)..addAll(internalSmartReplies.values),
-                                            ),
-                                          ),
-                                        )
-                                      : const SizedBox.shrink())),
-                            ),
-                          if (_messages.isEmpty && widget.customService != null)
-                            const SliverToBoxAdapter(
-                              child: Loader(text: "Loading surrounding message context..."),
-                            ),
-                          SliverAnimatedList(
-                              initialItemCount: _messages.length + 1,
-                              key: listKey,
-                              findChildIndexCallback: (key) => findChildIndexByKey(_messages, key, (item) => item.guid),
-                              itemBuilder: (BuildContext context, int index, Animation<double> animation) {
-                                // paginate
-                                if (index >= _messages.length) {
-                                  if (!noMoreMessages && initialized && index == _messages.length) {
-                                    if (!fetching) {
-                                      loadNextChunk();
-                                    }
-                                    return const Loader();
-                                  }
-
-                                  return const SizedBox.shrink();
-                                }
-
-                                Message? olderMessage;
-                                Message? newerMessage;
-                                if (index + 1 < _messages.length) {
-                                  olderMessage = _messages[index + 1];
-                                }
-                                if (index - 1 >= 0) {
-                                  newerMessage = _messages[index - 1];
-                                }
-
-                                final message = _messages[index];
-
-                                final messageWidget = Padding(
-                                  padding: const EdgeInsets.only(left: 5.0, right: 5.0),
-                                  child: MessageHolder(
-                                    cvController: controller,
-                                    message: message,
-                                    oldMessageGuid: olderMessage?.guid,
-                                    newMessageGuid: newerMessage?.guid,
-                                  ),
-                                );
-
-                                Widget toReturn;
-
-                                if (index == 0 || newerMessage?.dateScheduled != null) {
-                                  toReturn = SizeTransition(
-                                    axis: Axis.vertical,
-                                    sizeFactor: animation.drive(Tween(begin: 0.0, end: 1.0).chain(CurveTween(curve: Curves.easeInOut))),
-                                    child: SlideTransition(
-                                        position: animation.drive(
-                                          Tween(
-                                            begin: const Offset(0.0, 1),
-                                            end: const Offset(0.0, 0.0),
-                                          ).chain(
-                                            CurveTween(
-                                              curve: Curves.easeInOut,
-                                            ),
-                                          ),
-                                        ),
-                                        child: AnimatedBuilder(
-                                          animation: animation,
-                                          builder: (context, child) {
-                                            return Opacity(
-                                              opacity: message.guid!.contains("temp") &&
-                                                      (!isNullOrEmpty(message.text) || !isNullOrEmpty(message.subject)) &&
-                                                      !animation.isCompleted
-                                                  ? 0
-                                                  : 1,
-                                              child: child,
-                                            );
-                                          },
-                                          child: messageWidget,
-                                        )),
-                                  );
-                                } else {
-                                  toReturn = SizedBox(
-                                    key: ValueKey(_messages[index].guid!),
-                                    child: messageWidget,
-                                  );
-                                }
-
-                                // we are the last non-scheduled message
-                                if (message.dateScheduled == null && (newerMessage?.dateScheduled != null || index == 0)) {
-                                  toReturn = Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      toReturn,
-                                      if (!chat.isGroup && chat.isIMessage)
-                                        Align(child:AnimatedSize(
-                                          key: controller.focusInfoKey,
-                                          duration: const Duration(milliseconds: 250),
-                                          child: Obx(() => controller.recipientNotifsSilenced.value
-                                              ? Padding(
-                                                  padding: const EdgeInsets.only(top: 20, bottom: 10),
-                                                  child: Obx(() {
-                                                    latestMessageDeliveredState.value;
-                                                    var showNotifyAnyways = _messages.firstOrNull?.isFromMe == true &&
-                                                        _messages.firstOrNull?.dateRead == null &&
-                                                        _messages.firstOrNull?.wasDeliveredQuietly == true &&
-                                                        _messages.firstOrNull?.didNotifyRecipient == false;
-                                                    return Column(
-                                                    mainAxisSize: MainAxisSize.min,
-                                                    children: [
-                                                      Row(
-                                                        mainAxisSize: MainAxisSize.min,
-                                                        children: [
-                                                          Text(
-                                                            String.fromCharCode(moonIcon.codePoint),
-                                                            style: TextStyle(
-                                                              fontFamily: moonIcon.fontFamily,
-                                                              package: moonIcon.fontPackage,
-                                                              fontSize: context.theme.textTheme.bodyLarge!.fontSize,
-                                                              color: showNotifyAnyways ? context.theme.colorScheme.outline : Colors.deepPurple,
-                                                            ),
-                                                          ),
-                                                          Text(
-                                                            " ${chat.title ?? "Recipient"} has notifications silenced",
-                                                            style:
-                                                                context.theme.textTheme.bodyLarge!.copyWith(color: showNotifyAnyways ? context.theme.colorScheme.outline : Colors.deepPurple),
-                                                          ),
-                                                        ],
-                                                        ),
-                                                      showNotifyAnyways ? TextButton(
-                                                        child: Text("Notify Anyway",
-                                                            style: context.theme.textTheme.labelLarge!
-                                                                .copyWith(color: Colors.deepPurple)),
-                                                        style: TextButton.styleFrom(
-                                                          padding: EdgeInsets.zero,
-                                                          minimumSize: Size(50, 30),
-                                                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                                          alignment: Alignment.centerLeft),
-                                                        onPressed: () async {
-                                                          var msg = await api.newMsg(
-                                                            conversation: await chat.getConversationData(),
-                                                            sender: await chat.ensureHandle(),
-                                                            message: const api.Message.notifyAnyways(),
-                                                          );
-                                                          msg.id = _messages.first.guid!;
-                                                          try {
-                                                            await (backend as RustPushBackend).sendMsg(msg);
-                                                          } catch (e) {
-                                                            Logger.error(e);
-                                                            if (!chat.isRpSms) {
-                                                              rethrow; // APN errors are fatal for non-SMS messages
-                                                            }
-                                                          }
-                                                          _messages.first.wasDeliveredQuietly = false;
-                                                          _messages.first.save();
-                                                          eventDispatcher.emit("message-updated-${_messages.first.guid}");
-                                                          latestMessageDeliveredState.value = true;
-                                                          latestMessageDeliveredState.value = false;
-                                                          chat.dateNotifiedAnyways = DateTime.now();
-                                                          chat.save(updateDateNotifiedAnyways: true);
-                                                        },
-                                                      ) : const SizedBox.shrink()
-                                                    ],
-                                                  );
-                                                  })
-                                                )
-                                              : ConstrainedBox(
-                                                constraints: const BoxConstraints(
-                                                  minWidth: double.infinity, // Fix the width
-                                                  maxWidth: double.infinity,
+          child: GestureDetector(
+              behavior: HitTestBehavior.deferToChild,
+              onHorizontalDragUpdate: (details) {
+                if (ss.settings.skin.value != Skins.Samsung &&
+                    !kIsWeb &&
+                    !kIsDesktop) {
+                  controller.timestampOffset.value += details.delta.dx * 0.3;
+                }
+              },
+              onHorizontalDragEnd: (details) {
+                if (ss.settings.skin.value != Skins.Samsung) {
+                  controller.timestampOffset.value = 0;
+                }
+              },
+              onHorizontalDragCancel: () {
+                if (ss.settings.skin.value != Skins.Samsung) {
+                  controller.timestampOffset.value = 0;
+                }
+              },
+              child: Stack(
+                children: [
+                  Obx(
+                    () => AnimatedOpacity(
+                      opacity: _messages.isEmpty && widget.customService == null
+                          ? 0
+                          : (dragging.value ? 0.3 : 1),
+                      duration: const Duration(milliseconds: 150),
+                      curve: Curves.easeIn,
+                      child: DeferredPointerHandler(
+                        child: ScrollbarWrapper(
+                          reverse: true,
+                          controller: scrollController,
+                          showScrollbar: true,
+                          child: CustomScrollView(
+                            controller: scrollController,
+                            reverse: true,
+                            physics: ThemeSwitcher.getScrollPhysics(),
+                            slivers: <Widget>[
+                              if (showSmartReplies ||
+                                  internalSmartReplies.isNotEmpty)
+                                SliverToBoxAdapter(
+                                  child: Obx(() => AnimatedSize(
+                                      duration:
+                                          const Duration(milliseconds: 400),
+                                      child: smartReplies.isNotEmpty ||
+                                              internalSmartReplies.isNotEmpty
+                                          ? Padding(
+                                              padding: EdgeInsets.only(
+                                                  top: iOS ? 8.0 : 0.0,
+                                                  right: 5),
+                                              child: SizedBox(
+                                                height: context.theme
+                                                        .extension<
+                                                            BubbleText>()!
+                                                        .bubbleText
+                                                        .fontSize! +
+                                                    35,
+                                                child: ListView(
+                                                  scrollDirection:
+                                                      Axis.horizontal,
+                                                  reverse: true,
+                                                  children: List<Widget>.from(
+                                                      smartReplies)
+                                                    ..addAll(
+                                                        internalSmartReplies
+                                                            .values),
                                                 ),
-                                                child: const SizedBox.shrink(),
-                                              )),
-                                        ),
-                                        alignment: Alignment.center,
-                                        ),
-                                        if (!chat.isGroup && chat.isIMessage)
-                                        Align(child:AnimatedSize(
-                                          duration: const Duration(milliseconds: 250),
-                                          child: Obx(() => controller.reportJunkAvailable.value
-                                              ? Padding(
-                                                  padding: const EdgeInsets.only(top: 20, bottom: 10),
-                                                  child: GestureDetector(
-                                                    child: RichText(
-                                                      textAlign: TextAlign.center,
-                                                      text: TextSpan(
-                                                        style: context.theme.textTheme.labelMedium!.copyWith(color: context.theme.colorScheme.outline, fontWeight: FontWeight.normal),
-                                                        children: [
-                                                          TextSpan(
-                                                            text: "This sender is not in your contacts\n",
-                                                            style: context.theme.textTheme.labelMedium!.copyWith(fontWeight: FontWeight.w600, color: context.theme.colorScheme.outline, height: 2.5),
-                                                          ),
-                                                          TextSpan(
-                                                            text: "Report Junk",
-                                                            style: context.theme.textTheme.labelMedium!.copyWith(fontWeight: FontWeight.w600, color: context.theme.primaryColor),
-                                                          ),
-                                                        ],
-                                                      ),
-                                                    ),
-                                                    onTap: () async {
-                                                      showDialog(
-                                                        context: Get.context!,
-                                                        builder: (BuildContext context) {
-                                                          return AlertDialog(
-                                                            title: Text(
-                                                              "Report junk?",
-                                                              style: context.theme.textTheme.titleLarge,
-                                                            ),
-                                                            backgroundColor: context.theme.colorScheme.properSurface,
-                                                            content: Text("You can report this message to Apple.", style: context.theme.textTheme.bodyLarge),
-                                                            actions: <Widget>[
-                                                              TextButton(
-                                                                child: Text("Cancel",
-                                                                    style: context.theme.textTheme.bodyLarge!
-                                                                        .copyWith(color: context.theme.colorScheme.primary)),
-                                                                onPressed: () {
-                                                                  Navigator.of(context).pop();
-                                                                },
+                                              ),
+                                            )
+                                          : const SizedBox.shrink())),
+                                ),
+                              if (_messages.isEmpty &&
+                                  widget.customService != null)
+                                const SliverToBoxAdapter(
+                                  child: Loader(
+                                      text:
+                                          "Loading surrounding message context..."),
+                                ),
+                              SliverAnimatedList(
+                                  initialItemCount: _messages.length + 1,
+                                  key: listKey,
+                                  findChildIndexCallback: (key) =>
+                                      findChildIndexByKey(
+                                          _messages, key, (item) => item.guid),
+                                  itemBuilder: (BuildContext context, int index,
+                                      Animation<double> animation) {
+                                    // paginate
+                                    if (index >= _messages.length) {
+                                      if (!noMoreMessages &&
+                                          initialized &&
+                                          index == _messages.length) {
+                                        if (!fetching) {
+                                          loadNextChunk();
+                                        }
+                                        return const Loader();
+                                      }
+
+                                      return const SizedBox.shrink();
+                                    }
+
+                                    Message? olderMessage;
+                                    Message? newerMessage;
+                                    if (index + 1 < _messages.length) {
+                                      olderMessage = _messages[index + 1];
+                                    }
+                                    if (index - 1 >= 0) {
+                                      newerMessage = _messages[index - 1];
+                                    }
+
+                                    final message = _messages[index];
+
+                                    final messageWidget = Padding(
+                                      padding: const EdgeInsets.only(
+                                          left: 5.0, right: 5.0),
+                                      child: MessageHolder(
+                                        cvController: controller,
+                                        message: message,
+                                        oldMessageGuid: olderMessage?.guid,
+                                        newMessageGuid: newerMessage?.guid,
+                                      ),
+                                    );
+
+                                    Widget toReturn;
+
+                                    if (index == 0 ||
+                                        newerMessage?.dateScheduled != null) {
+                                      toReturn = SizeTransition(
+                                        axis: Axis.vertical,
+                                        sizeFactor: animation.drive(
+                                            Tween(begin: 0.0, end: 1.0).chain(
+                                                CurveTween(
+                                                    curve: Curves.easeInOut))),
+                                        child: SlideTransition(
+                                            position: animation.drive(
+                                              Tween(
+                                                begin: const Offset(0.0, 1),
+                                                end: const Offset(0.0, 0.0),
+                                              ).chain(
+                                                CurveTween(
+                                                  curve: Curves.easeInOut,
+                                                ),
+                                              ),
+                                            ),
+                                            child: AnimatedBuilder(
+                                              animation: animation,
+                                              builder: (context, child) {
+                                                return Opacity(
+                                                  opacity: message.guid!
+                                                              .contains(
+                                                                  "temp") &&
+                                                          (!isNullOrEmpty(
+                                                                  message
+                                                                      .text) ||
+                                                              !isNullOrEmpty(
+                                                                  message
+                                                                      .subject)) &&
+                                                          !animation.isCompleted
+                                                      ? 0
+                                                      : 1,
+                                                  child: child,
+                                                );
+                                              },
+                                              child: messageWidget,
+                                            )),
+                                      );
+                                    } else {
+                                      toReturn = SizedBox(
+                                        key: ValueKey(_messages[index].guid!),
+                                        child: messageWidget,
+                                      );
+                                    }
+
+                                    // we are the last non-scheduled message
+                                    if (message.dateScheduled == null &&
+                                        (newerMessage?.dateScheduled != null ||
+                                            index == 0)) {
+                                      toReturn = Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          toReturn,
+                                          if (!chat.isGroup && chat.isIMessage)
+                                            Align(
+                                              child: AnimatedSize(
+                                                key: controller.focusInfoKey,
+                                                duration: const Duration(
+                                                    milliseconds: 250),
+                                                child: Obx(() => controller
+                                                        .recipientNotifsSilenced
+                                                        .value
+                                                    ? Padding(
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .only(
+                                                                top: 20,
+                                                                bottom: 10),
+                                                        child: Obx(() {
+                                                          latestMessageDeliveredState
+                                                              .value;
+                                                          var showNotifyAnyways = _messages
+                                                                      .firstOrNull
+                                                                      ?.isFromMe ==
+                                                                  true &&
+                                                              _messages
+                                                                      .firstOrNull
+                                                                      ?.dateRead ==
+                                                                  null &&
+                                                              _messages
+                                                                      .firstOrNull
+                                                                      ?.wasDeliveredQuietly ==
+                                                                  true &&
+                                                              _messages
+                                                                      .firstOrNull
+                                                                      ?.didNotifyRecipient ==
+                                                                  false;
+                                                          return Column(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              Row(
+                                                                mainAxisSize:
+                                                                    MainAxisSize
+                                                                        .min,
+                                                                children: [
+                                                                  Text(
+                                                                    String.fromCharCode(
+                                                                        moonIcon
+                                                                            .codePoint),
+                                                                    style:
+                                                                        TextStyle(
+                                                                      fontFamily:
+                                                                          moonIcon
+                                                                              .fontFamily,
+                                                                      package:
+                                                                          moonIcon
+                                                                              .fontPackage,
+                                                                      fontSize: context
+                                                                          .theme
+                                                                          .textTheme
+                                                                          .bodyLarge!
+                                                                          .fontSize,
+                                                                      color: showNotifyAnyways
+                                                                          ? context
+                                                                              .theme
+                                                                              .colorScheme
+                                                                              .outline
+                                                                          : Colors
+                                                                              .deepPurple,
+                                                                    ),
+                                                                  ),
+                                                                  Text(
+                                                                    " ${chat.title ?? "Recipient"} has notifications silenced",
+                                                                    style: context
+                                                                        .theme
+                                                                        .textTheme
+                                                                        .bodyLarge!
+                                                                        .copyWith(
+                                                                            color: showNotifyAnyways
+                                                                                ? context.theme.colorScheme.outline
+                                                                                : Colors.deepPurple),
+                                                                  ),
+                                                                ],
                                                               ),
-                                                              TextButton(
-                                                                child: Text("Delete and Report",
-                                                                    style: context.theme.textTheme.bodyLarge!
-                                                                        .copyWith(color: context.theme.colorScheme.primary)),
-                                                                onPressed: () async {
-                                                                  Navigator.of(context).pop();
-                                                                  Navigator.of(context).pop();
-                                                                  try {
-                                                                    await pushService.markAsSpam(chat);
-                                                                  } catch (e, s) {
-                                                                    showSnackbar("Failed to mark as spam!", "$e");
-                                                                    Logger.error("Failed to mark as spam", error: e, trace: s);
-                                                                    rethrow;
-                                                                  }
-                                                                },
-                                                              ),
+                                                              showNotifyAnyways
+                                                                  ? TextButton(
+                                                                      child: Text(
+                                                                          "Notify Anyway",
+                                                                          style: context
+                                                                              .theme
+                                                                              .textTheme
+                                                                              .labelLarge!
+                                                                              .copyWith(color: Colors.deepPurple)),
+                                                                      style: TextButton.styleFrom(
+                                                                          padding: EdgeInsets
+                                                                              .zero,
+                                                                          minimumSize: Size(
+                                                                              50,
+                                                                              30),
+                                                                          tapTargetSize: MaterialTapTargetSize
+                                                                              .shrinkWrap,
+                                                                          alignment:
+                                                                              Alignment.centerLeft),
+                                                                      onPressed:
+                                                                          () async {
+                                                                        var msg =
+                                                                            await api.newMsg(
+                                                                          conversation:
+                                                                              await chat.getConversationData(),
+                                                                          sender:
+                                                                              await chat.ensureHandle(),
+                                                                          message:
+                                                                              const api.Message.notifyAnyways(),
+                                                                        );
+                                                                        msg.id = _messages
+                                                                            .first
+                                                                            .guid!;
+                                                                        try {
+                                                                          await (backend as RustPushBackend)
+                                                                              .sendMsg(msg);
+                                                                        } catch (e) {
+                                                                          Logger.error(
+                                                                              e);
+                                                                          if (!chat
+                                                                              .isRpSms) {
+                                                                            rethrow; // APN errors are fatal for non-SMS messages
+                                                                          }
+                                                                        }
+                                                                        _messages
+                                                                            .first
+                                                                            .wasDeliveredQuietly = false;
+                                                                        _messages
+                                                                            .first
+                                                                            .save();
+                                                                        eventDispatcher
+                                                                            .emit("message-updated-${_messages.first.guid}");
+                                                                        latestMessageDeliveredState.value =
+                                                                            true;
+                                                                        latestMessageDeliveredState.value =
+                                                                            false;
+                                                                        chat.dateNotifiedAnyways =
+                                                                            DateTime.now();
+                                                                        chat.save(
+                                                                            updateDateNotifiedAnyways:
+                                                                                true);
+                                                                      },
+                                                                    )
+                                                                  : const SizedBox
+                                                                      .shrink()
                                                             ],
                                                           );
-                                                        });
-                                                    },
-                                                  )
-                                                )
-                                              : ConstrainedBox(
-                                                constraints: const BoxConstraints(
-                                                  minWidth: double.infinity, // Fix the width
-                                                  maxWidth: double.infinity,
-                                                ),
-                                                child: const SizedBox.shrink(),
-                                              )),
-                                        ),
-                                        alignment: Alignment.center,
-                                        ),
-                                      Obx(() => Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: <Widget>[
-                                                if (controller.showTypingIndicatorFor.isNotEmpty && (chat.isGroup || ss.settings.alwaysShowAvatars.value) && iOS)
+                                                        }))
+                                                    : ConstrainedBox(
+                                                        constraints:
+                                                            const BoxConstraints(
+                                                          minWidth: double
+                                                              .infinity, // Fix the width
+                                                          maxWidth:
+                                                              double.infinity,
+                                                        ),
+                                                        child: const SizedBox
+                                                            .shrink(),
+                                                      )),
+                                              ),
+                                              alignment: Alignment.center,
+                                            ),
+                                          if (!chat.isGroup && chat.isIMessage)
+                                            Align(
+                                              child: AnimatedSize(
+                                                duration: const Duration(
+                                                    milliseconds: 250),
+                                                child: Obx(() =>
+                                                    controller
+                                                            .reportJunkAvailable
+                                                            .value
+                                                        ? Padding(
+                                                            padding:
+                                                                const EdgeInsets
+                                                                    .only(
+                                                                    top: 20,
+                                                                    bottom: 10),
+                                                            child:
+                                                                GestureDetector(
+                                                              child: RichText(
+                                                                textAlign:
+                                                                    TextAlign
+                                                                        .center,
+                                                                text: TextSpan(
+                                                                  style: context
+                                                                      .theme
+                                                                      .textTheme
+                                                                      .labelMedium!
+                                                                      .copyWith(
+                                                                          color: context
+                                                                              .theme
+                                                                              .colorScheme
+                                                                              .outline,
+                                                                          fontWeight:
+                                                                              FontWeight.normal),
+                                                                  children: [
+                                                                    TextSpan(
+                                                                      text:
+                                                                          "This sender is not in your contacts\n",
+                                                                      style: context
+                                                                          .theme
+                                                                          .textTheme
+                                                                          .labelMedium!
+                                                                          .copyWith(
+                                                                              fontWeight: FontWeight.w600,
+                                                                              color: context.theme.colorScheme.outline,
+                                                                              height: 2.5),
+                                                                    ),
+                                                                    TextSpan(
+                                                                      text:
+                                                                          "Report Junk",
+                                                                      style: context
+                                                                          .theme
+                                                                          .textTheme
+                                                                          .labelMedium!
+                                                                          .copyWith(
+                                                                              fontWeight: FontWeight.w600,
+                                                                              color: context.theme.primaryColor),
+                                                                    ),
+                                                                  ],
+                                                                ),
+                                                              ),
+                                                              onTap: () async {
+                                                                showDialog(
+                                                                    context: Get
+                                                                        .context!,
+                                                                    builder:
+                                                                        (BuildContext
+                                                                            context) {
+                                                                      return AlertDialog(
+                                                                        title:
+                                                                            Text(
+                                                                          "Report junk?",
+                                                                          style: context
+                                                                              .theme
+                                                                              .textTheme
+                                                                              .titleLarge,
+                                                                        ),
+                                                                        backgroundColor: context
+                                                                            .theme
+                                                                            .colorScheme
+                                                                            .properSurface,
+                                                                        content: Text(
+                                                                            "You can report this message to Apple.",
+                                                                            style:
+                                                                                context.theme.textTheme.bodyLarge),
+                                                                        actions: <Widget>[
+                                                                          TextButton(
+                                                                            child:
+                                                                                Text("Cancel", style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary)),
+                                                                            onPressed:
+                                                                                () {
+                                                                              Navigator.of(context).pop();
+                                                                            },
+                                                                          ),
+                                                                          TextButton(
+                                                                            child:
+                                                                                Text("Delete and Report", style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary)),
+                                                                            onPressed:
+                                                                                () async {
+                                                                              Navigator.of(context).pop();
+                                                                              Navigator.of(context).pop();
+                                                                              try {
+                                                                                await pushService.markAsSpam(chat);
+                                                                              } catch (e, s) {
+                                                                                showSnackbar("Failed to mark as spam!", "$e");
+                                                                                Logger.error("Failed to mark as spam", error: e, trace: s);
+                                                                                rethrow;
+                                                                              }
+                                                                            },
+                                                                          ),
+                                                                        ],
+                                                                      );
+                                                                    });
+                                                              },
+                                                            ))
+                                                        : ConstrainedBox(
+                                                            constraints:
+                                                                const BoxConstraints(
+                                                              minWidth: double
+                                                                  .infinity, // Fix the width
+                                                              maxWidth: double
+                                                                  .infinity,
+                                                            ),
+                                                            child:
+                                                                const SizedBox
+                                                                    .shrink(),
+                                                          )),
+                                              ),
+                                              alignment: Alignment.center,
+                                            ),
+                                          Obx(() => Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: <Widget>[
+                                                  if (controller
+                                                          .showTypingIndicatorFor
+                                                          .isNotEmpty &&
+                                                      (chat.isGroup ||
+                                                          ss
+                                                              .settings
+                                                              .alwaysShowAvatars
+                                                              .value) &&
+                                                      iOS)
+                                                    Padding(
+                                                      padding:
+                                                          const EdgeInsets.only(
+                                                              left: 10.0),
+                                                      child:
+                                                          ContactAvatarGroupWidget(
+                                                        participants: [
+                                                          ...controller
+                                                              .showTypingIndicatorFor
+                                                        ],
+                                                        size: 30,
+                                                        editable: false,
+                                                      ),
+                                                    ),
                                                   Padding(
-                                                    padding: const EdgeInsets.only(left: 10.0),
-                                                    child: ContactAvatarGroupWidget(
-                                                      participants: [...controller.showTypingIndicatorFor],
-                                                      size: 30,
-                                                      editable: false,
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            top: 5),
+                                                    child: TypingIndicator(
+                                                      controller: controller,
                                                     ),
                                                   ),
-                                                Padding(
-                                                  padding: const EdgeInsets.only(top: 5),
-                                                  child: TypingIndicator(
-                                                    controller: controller,
-                                                  ),
-                                                ),
-                                              ],
-                                            ))
-                                    ],
-                                  );
-                                }
-                                return AutoScrollTag(
-                                    key: ValueKey("${message.guid!}-scrolling"),
-                                    index: index,
-                                    controller: scrollController,
-                                    highlightColor: context.theme.colorScheme.surface.withOpacity(0.7),
-                                    child: toReturn);
-                              }),
-                          const SliverPadding(
-                            padding: EdgeInsets.all(70),
+                                                ],
+                                              ))
+                                        ],
+                                      );
+                                    }
+                                    return AutoScrollTag(
+                                        key: ValueKey(
+                                            "${message.guid!}-scrolling"),
+                                        index: index,
+                                        controller: scrollController,
+                                        highlightColor: context
+                                            .theme.colorScheme.surface
+                                            .withOpacity(0.7),
+                                        child: toReturn);
+                                  }),
+                              const SliverPadding(
+                                padding: EdgeInsets.all(70),
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ),
-              Obx(
-                () => AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  color: context.theme.colorScheme.surface.withOpacity(dragging.value ? 0.4 : 0),
-                  child: dragging.value
-                      ? Center(
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(iOS ? CupertinoIcons.paperclip : Icons.attach_file, color: context.theme.colorScheme.primary, size: 50),
-                              Text("Attach ${numFiles.value} File${numFiles.value > 1 ? 's' : ''}",
-                                  style: context.theme.textTheme.headlineLarge!.copyWith(color: context.theme.colorScheme.primary)),
-                            ],
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-                ),
-              ),
-            ],
-          )),
-    );
+                  Obx(
+                    () => AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      color: context.theme.colorScheme.surface
+                          .withOpacity(dragging.value ? 0.4 : 0),
+                      child: dragging.value
+                          ? Center(
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                      iOS
+                                          ? CupertinoIcons.paperclip
+                                          : Icons.attach_file,
+                                      color: context.theme.colorScheme.primary,
+                                      size: 50),
+                                  Text(
+                                      "Attach ${numFiles.value} File${numFiles.value > 1 ? 's' : ''}",
+                                      style: context
+                                          .theme.textTheme.headlineLarge!
+                                          .copyWith(
+                                              color: context
+                                                  .theme.colorScheme.primary)),
+                                ],
+                              ),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+                  ),
+                ],
+              )),
+        ));
   }
 }
 
@@ -753,7 +1045,8 @@ class Loader extends StatelessWidget {
           padding: const EdgeInsets.all(8.0),
           child: Text(
             text ?? "Loading more messages...",
-            style: context.theme.textTheme.labelLarge!.copyWith(color: context.theme.colorScheme.outline),
+            style: context.theme.textTheme.labelLarge!
+                .copyWith(color: context.theme.colorScheme.outline),
           ),
         ),
         Padding(
@@ -761,11 +1054,16 @@ class Loader extends StatelessWidget {
           child: ss.settings.skin.value == Skins.iOS
               ? Theme(
                   data: ThemeData(
-                    cupertinoOverrideTheme: const CupertinoThemeData(brightness: Brightness.dark),
+                    cupertinoOverrideTheme:
+                        const CupertinoThemeData(brightness: Brightness.dark),
                   ),
                   child: const CupertinoActivityIndicator(),
                 )
-              : const SizedBox(height: 20, width: 20, child: Center(child: CircularProgressIndicator(strokeWidth: 2))),
+              : const SizedBox(
+                  height: 20,
+                  width: 20,
+                  child:
+                      Center(child: CircularProgressIndicator(strokeWidth: 2))),
         ),
       ],
     );
